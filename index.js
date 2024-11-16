@@ -5,18 +5,12 @@ const fs = require('fs');
 const path = require('path');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
+const sharp = require('sharp');
 
 const app = express();
 const upload = multer({ dest: 'uploads/' });
 
-// const corsOptions = {
-//     origin: ['http://localhost:3000','https://abaf-2402-8100-24e8-e780-5dfb-98d-5c62-9a91.ngrok-free.app/','https://time.navneet.website/'],
-// };
-
 app.use(cors());
-// app.use(cors(corsOptions));
-
-
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
@@ -30,10 +24,10 @@ app.get('/', (req, res) => {
 
 app.post('/card', upload.single('photo'), async (req, res) => {
     const { name, address } = req.body;
-    const photoPath = req.file ? req.file.path : null;
+    let photoPath = req.file ? req.file.path : null;
 
-    console.log(name)
-    console.log(address)
+    console.log(name);
+    console.log(address);
 
     // Canvas dimensions
     const width = 856;
@@ -47,14 +41,43 @@ app.post('/card', upload.single('photo'), async (req, res) => {
             fs.mkdirSync(path.join(__dirname, 'images'));
         }
 
+        // Convert HEIC/HEIF images to PNG if necessary
+        if (photoPath) {
+            const fileExtension = path.extname(photoPath).toLowerCase();
+            if (fileExtension === '.heic' || fileExtension === '.heif') {
+                try {
+                    const convertedPath = `${photoPath}.png`;
+                    await sharp(photoPath)
+                        .toFormat('png')
+                        .toFile(convertedPath);
+                    fs.unlinkSync(photoPath); // Delete the original file
+                    photoPath = convertedPath; // Update the photoPath to the converted file
+                } catch (conversionError) {
+                    console.error("Failed to convert HEIC/HEIF image. Skipping photo placement.");
+                    photoPath = null; // Skip using the photo
+                }
+            }
+        }
+
         // Load template image
         const templatePath = path.join(__dirname, 'templateNav.png');
         const templateImage = await loadImage(templatePath);
         ctx.drawImage(templateImage, 0, 0, width, height);
 
-        // Load and place user photo
-        const userPhoto = await loadImage(photoPath);
-        ctx.drawImage(userPhoto, 625, 220, 220, 220); // Adjust position and size as needed
+        // Try to load and place the user photo if available
+        if (photoPath) {
+            try {
+                const userPhoto = await loadImage(photoPath);
+                ctx.drawImage(userPhoto, 625, 220, 220, 220); // Adjust position and size as needed
+            } catch (photoError) {
+                console.error("Failed to load user photo. Skipping photo placement.");
+            } finally {
+                // Delete the uploaded or converted photo after processing
+                fs.unlink(photoPath, (err) => {
+                    if (err) console.error('Failed to delete processed photo:', err);
+                });
+            }
+        }
 
         // Add user details to the card
         ctx.font = '30px Arial';
@@ -71,11 +94,6 @@ app.post('/card', upload.single('photo'), async (req, res) => {
         stream.pipe(out);
 
         out.on('finish', () => {
-            // Delete the uploaded user photo after processing
-            fs.unlink(photoPath, (err) => {
-                if (err) console.error('Failed to delete uploaded photo:', err);
-            });
-
             const imageUrl = `${req.protocol}://${req.get('host')}/images/${imageId}.png`;
             res.json({ imageUrl });
         });
